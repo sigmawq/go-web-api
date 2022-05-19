@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 	"io/ioutil"
 	"log"
 	"strconv"
 	"math"
+	"errors"
 )
 
 func auth(c *gin.Context) {
@@ -190,6 +192,7 @@ func getUserPage(c *gin.Context) {
 
 	_page := c.Query("page")
 	page, err := strconv.Atoi(_page)
+	page -= 1
 	if err != nil {
 		c.Status(404)
 		return
@@ -255,43 +258,57 @@ func getUserPage(c *gin.Context) {
 		orderBy = "id"
 	}
 
-	result := db.Find(&users, queryFind)
-	if result.Error != nil {
-		c.Status(404)
+	err = db.Order(orderBy).Find(&users, queryFind).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(404, gin.H { "error": "nothing found" })
+		} else {
+			c.Status(500)
+		}
+		return
 	}
 
-	itemsTotal := result.RowsAffected
-	pagesTotal := int(math.Ceil(float64(itemsTotal / perPageItemsCount)))
+	res := db.Model(&User{}).Find(&users, queryFind)
+
+	itemsTotal := res.RowsAffected
+	pagesTotal := int(math.Ceil(float64(itemsTotal) / float64(perPageItemsCount)))
 
 	if page >= pagesTotal || page < 0 {
 		c.JSON(404, gin.H { 
 			"error": "You have requested an invalid page",
+			"items_total": itemsTotal,
 			"pages_total": pagesTotal,
 		})
+
+		return
 	}
 
-	err = db.Limit(perPageItemsCount).Offset(page * perPageItemsCount).Order(orderBy).Find(&users, queryFind).Error
-	if err != nil {
-		c.Status(404)
+	lo := page * perPageItemsCount
+	hi := (page * perPageItemsCount) + perPageItemsCount
+	if hi >= len(users) {
+		hi = len(users) - 1
 	}
+	itemsOnThisPage := hi - lo
+	log.Printf("%v %v", lo, hi)
+	usersPage := users[lo:hi]
 
-	usersDisplayDtos := make([]UserDisplayDTO, len(users))
-	for i, user := range users {
+	usersDisplayDtos := make([]UserDisplayDTO, 0)
+	for _, user := range usersPage {
 		valid, reason := user.Validate()
 		if !valid {
-			// If some object has an invalid state I decide to not send anything. Though it can be changed.
+			// If some object has an invalid state it will be ommited. 
 			log.Printf("An invalid object has been encountered while processing a request: %v\n (%v)", reason, user)
-			c.Status(500)
-			return
+			continue
 		}
-		usersDisplayDtos[i] = user.ToDisplay()
+
+		usersDisplayDtos = append(usersDisplayDtos, user.ToDisplay())
 	}
 
 	c.JSON(200, gin.H{
-		"page_current": page,
+		"page_current": page + 1,
 		"pages_total": pagesTotal,
-		"page_items_count": perPageItemsCount,
-		"page_items_total": itemsTotal,
+		"items_total": itemsTotal,
+		"items_here": itemsOnThisPage,
 		"items": usersDisplayDtos,
 	})
 }
