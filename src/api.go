@@ -289,7 +289,6 @@ func getUserPage(c *gin.Context) {
 		hi = len(users) - 1
 	}
 	itemsOnThisPage := hi - lo
-	log.Printf("%v %v", lo, hi)
 	usersPage := users[lo:hi]
 
 	usersDisplayDtos := make([]UserDisplayDTO, 0)
